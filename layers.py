@@ -39,8 +39,7 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(pdrop)
 
     def scaled_dot_product_attention(self, queries, keys, values, mask=None):
-        print(f"Multiplying Q: {queries.shape}, K: {keys.shape}, with values {values.shape}")
-        factor = torch.sqrt(torch.tensor(queries.shape[-2])).to(queries.device)
+        factor = torch.sqrt(torch.tensor(keys.shape[-2])).to(queries.device)
 
         weights = torch.matmul(queries, keys.transpose(-2, -1)) / factor
 
@@ -61,7 +60,6 @@ class MultiHeadAttention(nn.Module):
         return self.last_attention_weights
 
     def forward(self, queries, keys, values, mask=None):
-        print(f"Queries: {queries.shape}, Keys: {keys.shape}, Values: {values.shape}")
         Q = self.W_Q(queries)
         K = self.W_K(keys)
         V = self.W_V(values)
@@ -89,13 +87,9 @@ class FeedForwardLayer(nn.Module):
             nn.ReLU(),
             nn.Linear(d_ff, d_model)
         )
-        self.dropout = nn.Dropout(0.1)
-        self.layer_norm = nn.LayerNorm(d_model)
 
     def forward(self, x):
-        x = x + self.feed_forward(x)
-        x = self.layer_norm(x)
-        return x
+        return self.feed_forward(x)
 
 class EncoderLayer(nn.Module):
     def __init__(self, d_model, d_ff, h, p_dropout):
@@ -110,12 +104,10 @@ class EncoderLayer(nn.Module):
 
     def forward(self, x):
         x1 = self.attention_layer(x, x, x)
-        x2 = self.layer_norm1(x1) + x
-        x2 = self.dropout1(x2)
+        x2 = self.layer_norm1(self.dropout1(x1) + x)
 
         x1 = self.feed_forward_layer(x2)
-        x2 = self.layer_norm2(x1) + x2
-        x2 = self.dropout2(x2)
+        x2 = self.layer_norm2(self.dropout2(x1) + x2)
 
         return x2
     
@@ -145,15 +137,12 @@ class DecoderLayer(nn.Module):
         mask = generate_causal_mask(input.shape[1])
 
         x1 = self.causal_attention_layer(input, input, input, mask)
-        x2 = self.layer_norm1(x1) + input
-        x2 = self.dropout1(x2)
+        x2 = self.layer_norm1(self.dropout1(x1) + input)
 
         x1 = self.cross_attention_layer(x2, context, context)
-        x2 = self.layer_norm2(x1) + x2
-        x2 = self.dropout2(x2)
+        x2 = self.layer_norm2(self.dropout2(x1) + x2)
 
         x1 = self.feed_forward_layer(x2)
-        x2 = self.layer_norm3(x1) + x2
-        x2 = self.dropout3(x2)
+        x2 = self.layer_norm3(self.dropout3(x1) + x2)
 
         return x2
