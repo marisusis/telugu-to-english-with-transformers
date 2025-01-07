@@ -4,9 +4,8 @@ import numpy as np
 from utils import *
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, pdrop=0.1, max_len=256):
+    def __init__(self, d_model, max_len=512):
         super(PositionalEncoding, self).__init__()
-        self.dropout = nn.Dropout(p=pdrop)
         
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len).unsqueeze(1).float()
@@ -18,7 +17,7 @@ class PositionalEncoding(nn.Module):
         
     def forward(self, x):
         x = x + self.pe[:, :x.size(1)]
-        return self.dropout(x)
+        return x
 
     
 class MultiHeadAttention(nn.Module):
@@ -134,7 +133,7 @@ class DecoderLayer(nn.Module):
         return self.causal_attention_layer.get_last_attention_weights()
     
     def forward(self, input, context):
-        mask = generate_causal_mask(input.shape[1])
+        mask = generate_causal_mask(input.shape[1]).to(input.device)
 
         x1 = self.causal_attention_layer(input, input, input, mask)
         x2 = self.layer_norm1(self.dropout1(x1) + input)

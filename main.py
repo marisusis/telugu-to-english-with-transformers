@@ -5,6 +5,7 @@ from model import *
 from plotting import *
 from dataset import *
 from tokenization import *
+from colorama import Fore, Style
 
 import tomllib
 
@@ -21,12 +22,16 @@ from tqdm import tqdm
 import polars as pl
 
 import sklearn
+import traceback
+import time
+import random
 
 
 @click.group()
 @click.option('--debug/--no-debug', default=False)
+@click.option('--device', default="cpu")
 @click.pass_context
-def cli(ctx, debug):
+def cli(ctx, debug, device):
     # ensure that ctx.obj exists and is a dict (in case `cli()` is called
     # by means other than the `if` block below)
     ctx.ensure_object(dict)
@@ -34,13 +39,31 @@ def cli(ctx, debug):
     with open('config.toml', 'rb') as f:
         config = tomllib.load(f)
 
-    print(f"Using config {config}.")
+    print(f"{Style.DIM}Using config {config}.{Style.RESET_ALL}")
+
+    if device == "mps":
+        if not torch.backends.mps.is_available():
+            raise ValueError("MPS device requested but not available.")
+        
+    elif device == "cuda":
+        if not torch.cuda.is_available():
+            raise ValueError("CUDA device requested but not available.")
 
 
     ctx.obj['DEBUG'] = debug
     ctx.obj['config'] = config
+    ctx.obj['device'] = torch.device(device)
 
-    data_dir = os.path.join(os.path.dirname(__file__), '.data')
+    # Check for the device
+
+
+
+
+    data_dir = os.path.join(os.path.dirname(__file__), config["data_root"])
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+
+    data_dir = os.path.join(os.path.dirname(__file__), config["data_root"], "checkpoints")
     if not os.path.exists(data_dir):
         os.makedirs(data_dir)
 
@@ -52,37 +75,133 @@ def test_data(ctx):
 
 @cli.command()
 @click.pass_context
-def train(ctx): 
+@click.option('--checkpoint', default=None)
+def train(ctx, checkpoint): 
     """
     Train the model.
     """
     config = ctx.obj['config']
+    device = ctx.obj['device']
 
-    sp_source = spm.SentencePieceProcessor(model_file='.data/tokenizers/source.model')
-    sp_target = spm.SentencePieceProcessor(model_file='.data/tokenizers/target.model')
+    sp_source = spm.SentencePieceProcessor(model_file=f"{config['data_root']}/tokenizers/source.model")
+    sp_target = spm.SentencePieceProcessor(model_file=f"{config['data_root']}/tokenizers/target.model")
 
     src_vocab_size = sp_source.GetPieceSize()
     tgt_vocab_size = sp_target.GetPieceSize()
 
-    dataset = PairedTextDataset(f"{config['data_root']}/source_train.txt", 
-                                f"{config['data_root']}/target_train.txt")
+    train_dataset = PairedTextDataset(f"{config['data_root']}/source_train.txt", 
+                                f"{config['data_root']}/target_train.txt",
+                                sp_source, 
+                                sp_target)
     
+    val_dataset = PairedTextDataset(f"{config['data_root']}/source_val.txt",
+                                f"{config['data_root']}/target_val.txt",
+                                sp_source,
+                                sp_target)
+
+    transformer = Transformer(config["model"]["d_model"], 
+                              config["model"]["d_ff"], 
+                              config["model"]["h"], 
+                              src_vocab_size, 
+                              tgt_vocab_size, 
+                              config["model"]["N"],
+                              config["model"]["max_context"])
+    
+    criteron = nn.NLLLoss()
+    optimizer = torch.optim.Adam(transformer.parameters(), lr=config["training"]["lr"], betas=(0.9, 0.98), eps=1e-9)
+    
+    start_epoch = 0
+    if checkpoint is not None:
+        checkpoint = torch.load(checkpoint)
+        transformer.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        start_epoch = checkpoint["current_epoch"]
+
+    transformer = transformer.to(device)
+
+    print(f"{Style.DIM}Saving model every {config['training']['save_every']} batches.{Style.RESET_ALL}")
+    
+    for epoch in range(start_epoch, start_epoch + config["training"]["epochs"]):
+        transformer.epoch = epoch
+        print(f"{Fore.GREEN}Epoch {epoch+1}/{start_epoch + config["training"]["epochs"]}{Style.RESET_ALL}")
+        count = 0
+
+        with tqdm(train_dataset.batch(batch_size=config["training"]["batch_size"]), 
+                total=train_dataset.batch_length(batch_size=config["training"]["batch_size"])) as progress:
+            progress.colour = "green"
+            progress.set_description("Training model")
+            for src, tgt_input, tgt_output in progress:
+
+                src = src.to(device)
+                tgt_input = tgt_input.to(device)
+                tgt_output = tgt_output.to(device)
 
 
-    transformer = Transformer(config["model"]["d_model"], config["model"]["d_ff"], config["model"]["h"], src_vocab_size, tgt_vocab_size, config["model"]["N"])
+                try:
+                    # TRAINING CODE GOES HERE
+                    output = transformer.forward(tgt_input, src)
+
+                    loss = criteron(output.view(-1, tgt_vocab_size), 
+                                    tgt_output.view(tgt_output.shape[0] * tgt_output.shape[1]))
+
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                    progress.set_postfix(
+                        train_loss=loss.item()
+                    )
+
+                except RuntimeError as e:
+                    print(f"{Fore.RED}Error during forward pass: {e}{Style.RESET_ALL}")
+                    traceback.print_exc()
+                    print(f"Source shape: {src.shape}")
+                    print(f"Target input shape: {tgt_input.shape}")
+                    print(f"Target output shape: {tgt_output.shape}")
+                    continue
+
+                count += 1
+                if count % config["training"]["save_every"] == 0:
+                    state_dict = {
+                        "model_state_dict": transformer.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "current_epoch": epoch
+                    }
+                    torch.save(state_dict, f"{config['data_root']}/checkpoints/{epoch}_{count}_checkpoint.pth")
+        
+        state_dict = {
+            "model_state_dict": transformer.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "current_epoch": epoch + 1
+        }
+        torch.save(state_dict, f"{config['data_root']}/checkpoints/{epoch}_checkpoint.pth")
+                    
+
+        with tqdm(val_dataset.batch(batch_size=config["training"]["batch_size"]),
+                total=val_dataset.batch_length(batch_size=config["training"]["batch_size"])) as progress:
+            progress.colour = "blue"
+            progress.set_description("Running validation")
+            for batch in progress:
+                batch
+
+        print(f"{Fore.GREEN}Finished epoch {epoch+1}{Style.RESET_ALL}")
+        
+
+
 
 
 @cli.command()
 @click.pass_context
 def test_model(ctx): 
-    sp_source = spm.SentencePieceProcessor(model_file='.data/tokenizers/source.model')
-    sp_target = spm.SentencePieceProcessor(model_file='.data/tokenizers/target.model')
+    config = ctx.obj['config']
+    sp_source = spm.SentencePieceProcessor(model_file=f"{config['data_root']}/tokenizers/source.model")
+    sp_target = spm.SentencePieceProcessor(model_file=f"{config['data_root']}/tokenizers/target.model")
 
     d_model = 512
     token_count_src = 15
     token_count_tgt = 10
 
-    transformer = Transformer(d_model, 2048, 8, 36000, 36000, 6)
+    transformer = Transformer(d_model, 2048, 8, 36000, 36000, 6, 100)
 
     src_tokens = torch.randint(0, 36000, (1, token_count_src))
     tgt_tokens = torch.randint(0, 36000, (1, token_count_tgt))
@@ -90,18 +209,59 @@ def test_model(ctx):
     target = "Hello everybody, my name is Markiplier!"
     source = "అందరికీ నమస్కారం, నా పేరు మార్కిప్లియర్!"
 
-    tgt_tokens = sp_target.encode(target)
-    src_tokens = sp_source.encode(source)
+    tgt_tokens = torch.tensor(sp_target.encode(target)).unsqueeze(0)
+    src_tokens = torch.tensor(sp_source.encode(source)).unsqueeze(0)
 
-    transformer.forward(torch.tensor(tgt_tokens).unsqueeze(0), 
-                        torch.tensor(src_tokens).unsqueeze(0))
+    output = transformer.forward(tgt_tokens, src_tokens)
 
     attention = transformer.decoder.get_cross_attention_weights()
-    plot_attention("cross_attention.png", 
-                   attention[0][0][1].detach().numpy(),
-                   query_tokens=[sp_target.Decode([x]) for x in tgt_tokens],
-                     key_tokens=[sp_source.Decode([x]) for x in src_tokens])
-    plt.show()
+    print("Shape of attention weights:", attention[0][0][1].detach().numpy().shape)
+    print("Shape of target tokens:", tgt_tokens.shape)
+    print("Shape of source tokens:", src_tokens.shape)
+    print("Shape of model output:", output.shape)
+    # plot_attention("cross_attention.png", 
+    #                attention[0][0][1].detach().numpy(),
+    #                query_tokens=[sp_target.Decode([x]) for x in tgt_tokens],
+    #                  key_tokens=[sp_source.Decode([x]) for x in src_tokens])
+    # plt.show()
+
+@cli.command()
+@click.argument("input")
+@click.option("--model", default=None)
+@click.pass_context
+def inference(ctx, model, input):
+    config = ctx.obj['config']
+    device = ctx.obj['device']
+
+    sp_source = spm.SentencePieceProcessor(model_file=f"{config['data_root']}/tokenizers/source.model")
+    sp_target = spm.SentencePieceProcessor(model_file=f"{config['data_root']}/tokenizers/target.model")
+
+    input_tokens = sp_source.encode(input, add_bos=True, add_eos=True)
+    print(f"Input tokens: {input_tokens}")
+
+    transformer = Transformer(config["model"]["d_model"],
+                                config["model"]["d_ff"],
+                                config["model"]["h"],
+                                sp_source.GetPieceSize(),
+                                sp_target.GetPieceSize(),
+                                config["model"]["N"],
+                                config["model"]["max_context"])
+    
+    if model is not None:
+        checkpoint = torch.load(model, weights_only=True)
+        transformer.load_state_dict(checkpoint["model_state_dict"])
+
+    transformer.to(device)
+
+    output = transformer.forward(torch.tensor(sp_target.Encode("Where is the", add_bos=True)).unsqueeze(0).to(device), 
+                                 torch.tensor(input_tokens).unsqueeze(0).to(device))
+    
+    output = output.squeeze(0)
+
+    output = torch.multinomial(torch.softmax(output, dim=-1), num_samples=1).squeeze(-1)
+    print(output)
+    print(sp_target.DecodeIds(output.tolist()))
+
 
 @cli.command()
 @click.option('--src_vocab_size', default=16000)
@@ -114,13 +274,23 @@ def tokenize(ctx, src_vocab_size=16000):
     if not os.path.exists(tokenizer_dir):
         os.makedirs(tokenizer_dir)
 
+    start_id = 1
+    end_id = 2
+    pad_id = 0
+    unk_id = 3
+
+
     spm.SentencePieceTrainer.train(
         input=os.path.join(config["data_root"], "source.txt"),
         model_prefix=os.path.join(config["data_root"], "tokenizers", "source"),
         vocab_size=config["tokenizer"]["source_vocab_size"],
         input_sentence_size=config["tokenizer"]["input_sentence_size"],
         max_sentence_length=config["tokenizer"]["max_sentence_length"],
-        character_coverage=1.0
+        character_coverage=1.0,
+        bos_id=start_id,
+        eos_id=end_id,
+        pad_id=pad_id,
+        unk_id=unk_id
     )
     spm.SentencePieceTrainer.train(
         input=os.path.join(config["data_root"], "target.txt"),
@@ -128,7 +298,11 @@ def tokenize(ctx, src_vocab_size=16000):
         vocab_size=config["tokenizer"]["target_vocab_size"],
         input_sentence_size=config["tokenizer"]["input_sentence_size"],
         max_sentence_length=config["tokenizer"]["max_sentence_length"],
-        character_coverage=1.0
+        character_coverage=1.0,
+        bos_id=start_id,
+        eos_id=end_id,
+        pad_id=pad_id,
+        unk_id=unk_id
     )
 
 @cli.command()

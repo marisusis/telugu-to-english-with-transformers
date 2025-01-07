@@ -1,10 +1,10 @@
 from layers import *
 
 class Encoder(nn.Module):
-    def __init__(self, d_model, d_ff, h, vocab_size, N, p_dropout):
+    def __init__(self, d_model, d_ff, h, vocab_size, N, p_dropout, max_context):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, d_model)
-        self.positional_encoding = PositionalEncoding(d_model)
+        self.positional_encoding = PositionalEncoding(d_model, max_context)
         self.encoder_layers = nn.ModuleList([EncoderLayer(d_model, d_ff, h, p_dropout) for _ in range(N)])
 
     def get_self_attention_weights(self):
@@ -18,10 +18,10 @@ class Encoder(nn.Module):
         return x
     
 class Decoder(nn.Module):
-    def __init__(self, d_model, d_ff, h, vocab_size, N, p_dropout):
+    def __init__(self, d_model, d_ff, h, vocab_size, N, p_dropout, max_context):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, d_model)
-        self.positional_encoding = PositionalEncoding(d_model)
+        self.positional_encoding = PositionalEncoding(d_model, max_context)
         self.decoder_layers = nn.ModuleList([DecoderLayer(d_model, d_ff, h, p_dropout) for _ in range(N)])
 
     def get_self_attention_weights(self):
@@ -38,10 +38,10 @@ class Decoder(nn.Module):
         return x
     
 class Transformer(nn.Module):
-    def __init__(self, d_model, d_ff, h, in_vocab, out_vocab, N):
+    def __init__(self, d_model, d_ff, h, in_vocab, out_vocab, N, max_context):
         super().__init__()
-        self.encoder = Encoder(d_model, d_ff, h, in_vocab, N, 0.1)
-        self.decoder = Decoder(d_model, d_ff, h, out_vocab, N, 0.1)
+        self.encoder = Encoder(d_model, d_ff, h, in_vocab, N, 0.1, max_context)
+        self.decoder = Decoder(d_model, d_ff, h, out_vocab, N, 0.1, max_context)
         self.output = nn.Linear(d_model, out_vocab)
     
     def decoder_embedding(self):
@@ -57,23 +57,5 @@ class Transformer(nn.Module):
         target = self.decoder(target, context)
         # print("Decoder shape", x.shape)
         target = self.output(target)
-        target = torch.log_softmax(target, -1)
+        target = torch.softmax(target, -1)
         return target
-    
-def plot_attention(attention, queries, keys):
-    fig, ax = plt.subplots()
-    fig, ax = plt.subplots(figsize=(8, 6))
-    plot = ax.pcolormesh(attention)
-    # plot = ax.pcolormesh(torch.softmax(mask[0], -1))
-    ax.xaxis.set_ticks_position('top')
-    # ax.set_xlabel("English"
-    ax.set_xticks(np.arange(context_size) + 0.5)
-    ax.set_yticklabels(tokenizer_en.encode(phrase_en).tokens)
-    ax.set_yticks(np.arange(context_size) + 0.5)
-    matplotlib.text.Text
-    ax.set_xticklabels(tokenizer_te.encode(phrase_te).tokens, fontfamily="Kohinoor Telugu")
-    ax.invert_yaxis()
-    ax.xaxis.set_label_position('top')
-    fig.colorbar(plot)
-
-    plt.show()
