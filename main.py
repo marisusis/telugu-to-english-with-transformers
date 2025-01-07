@@ -113,12 +113,15 @@ def train(ctx, checkpoint):
     
     start_epoch = 0
     if checkpoint is not None:
-        checkpoint = torch.load(checkpoint)
+        checkpoint = torch.load(checkpoint, map_location=device)
         transformer.load_state_dict(checkpoint["model_state_dict"])
+        transformer.to(device)
+        optimizer = torch.optim.Adam(transformer.parameters(), lr=config["training"]["lr"], betas=(0.9, 0.98), eps=1e-9)
+
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         start_epoch = checkpoint["current_epoch"]
 
-    transformer = transformer.to(device)
+    
 
     print(f"{Style.DIM}Saving model every {config['training']['save_every']} batches.{Style.RESET_ALL}")
     
@@ -137,6 +140,7 @@ def train(ctx, checkpoint):
                 tgt_input = tgt_input.to(device)
                 tgt_output = tgt_output.to(device)
 
+                # break
 
                 try:
                     # TRAINING CODE GOES HERE
@@ -144,7 +148,7 @@ def train(ctx, checkpoint):
 
                     loss = critereon(output.view(-1, tgt_vocab_size), 
                                     tgt_output.view(-1))
-
+                    
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
@@ -188,6 +192,74 @@ def train(ctx, checkpoint):
         print(f"{Fore.GREEN}Finished epoch {epoch+1}{Style.RESET_ALL}")
         
 
+@cli.command()
+@click.argument("model")
+@click.pass_context
+def validate(ctx, model):
+    """
+    Train the model.
+    """
+    config = ctx.obj['config']
+    device = ctx.obj['device']
+
+    sp_source = spm.SentencePieceProcessor(model_file=f"{config['data_root']}/tokenizers/source.model")
+    sp_target = spm.SentencePieceProcessor(model_file=f"{config['data_root']}/tokenizers/target.model")
+
+    src_vocab_size = sp_source.GetPieceSize()
+    tgt_vocab_size = sp_target.GetPieceSize()
+    
+    val_dataset = PairedTextDataset(f"{config['data_root']}/source_val.txt",
+                                f"{config['data_root']}/target_val.txt",
+                                sp_source,
+                                sp_target)
+
+    transformer = Transformer(config["model"]["d_model"], 
+                              config["model"]["d_ff"], 
+                              config["model"]["h"], 
+                              src_vocab_size, 
+                              tgt_vocab_size, 
+                              config["model"]["N"],
+                              config["model"]["max_context"])
+    
+    critereon = nn.NLLLoss(ignore_index=0, reduction='mean')
+
+    if model is not None:
+        checkpoint = torch.load(model, map_location=device)
+        transformer.load_state_dict(checkpoint["model_state_dict"])
+        start_epoch = checkpoint["current_epoch"]
+
+    transformer = transformer.to(device)
+
+    losses = []
+
+    with tqdm(val_dataset.batch(batch_size=1),
+            total=val_dataset.batch_length(batch_size=1)) as progress:
+        progress.colour = "blue"
+        progress.set_description("Running validation")
+        count = 0
+        for src, tgt_input, tgt_output in progress:
+            src = src.to(device)
+            tgt_input = tgt_input.to(device)
+            tgt_output = tgt_output.to(device)
+
+            # TRAINING CODE GOES HERE
+            output = transformer.forward(tgt_input, src)
+
+            loss = critereon(output.view(-1, tgt_vocab_size), 
+                            tgt_output.view(-1))
+
+            losses.append(loss.detach().item())
+
+            count += 1
+            if count > 1000:
+                break
+
+    losses = np.array(losses)
+
+    plt.hist(losses)
+    plt.savefig("losses.png")
+    plt.show()
+        
 
 
 
@@ -249,17 +321,21 @@ def inference(ctx, model, input):
                                 config["model"]["max_context"])
     
     if model is not None:
-        checkpoint = torch.load(model, weights_only=True)
+        checkpoint = torch.load(model, weights_only=True, map_location=device)
         transformer.load_state_dict(checkpoint["model_state_dict"])
 
     transformer.to(device)
 
-    output = transformer.forward(torch.tensor(sp_target.Encode("Where is the", add_bos=True)).unsqueeze(0).to(device), 
+    output = transformer.forward(torch.tensor(sp_target.Encode(input, add_bos=True)).unsqueeze(0).to(device), 
                                  torch.tensor(input_tokens).unsqueeze(0).to(device))
     
     output = output.squeeze(0)
 
-    output = torch.multinomial(torch.softmax(output, dim=-1), num_samples=1).squeeze(-1)
+    # output = torch.multinomial(torch.softmax(output, dim=-1), num_samples=1).squeeze(-1)
+
+    # perform greedy decoding
+    output = torch.argmax(output, dim=-1)
+
     print(output)
     print(sp_target.DecodeIds(output.tolist()))
 

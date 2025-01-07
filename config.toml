@@ -1,11 +1,11 @@
-data_root="./.data_es"
+data_root="./.data_es2"
 
 [model]
 max_context=512
 d_model=128
 d_ff=512
 h=8
-N=6
+N=2
 
 [tokenizer]
 max_sentence_length=16384
