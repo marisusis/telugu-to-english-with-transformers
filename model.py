@@ -57,5 +57,5 @@ class Transformer(nn.Module):
         target = self.decoder(target, context)
         # print("Decoder shape", x.shape)
         target = self.output(target)
-        target = torch.softmax(target, -1)
+        target = torch.log_softmax(target, -1)
         return target

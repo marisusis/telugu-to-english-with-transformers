@@ -107,7 +107,8 @@ def train(ctx, checkpoint):
                               config["model"]["N"],
                               config["model"]["max_context"])
     
-    criteron = nn.NLLLoss()
+    # criteron = nn.CrossEntropyLoss(ignore_index=0, reduction='mean')
+    critereon = nn.NLLLoss(ignore_index=0, reduction='mean')
     optimizer = torch.optim.Adam(transformer.parameters(), lr=config["training"]["lr"], betas=(0.9, 0.98), eps=1e-9)
     
     start_epoch = 0
@@ -141,8 +142,8 @@ def train(ctx, checkpoint):
                     # TRAINING CODE GOES HERE
                     output = transformer.forward(tgt_input, src)
 
-                    loss = criteron(output.view(-1, tgt_vocab_size), 
-                                    tgt_output.view(tgt_output.shape[0] * tgt_output.shape[1]))
+                    loss = critereon(output.view(-1, tgt_vocab_size), 
+                                    tgt_output.view(-1))
 
                     optimizer.zero_grad()
                     loss.backward()
@@ -392,6 +393,23 @@ def prepare_dataset(ctx):
         with open(path, "w", encoding="utf-8") as f:
             for entry in tqdm(ds["text"], unit=" lines"):
                 f.write(entry + "\n")
+
+@cli.command()
+@click.pass_context
+def test_positional_encoding(ctx):
+    config = ctx.obj['config']
+    d_model = config["model"]["d_model"]
+    max_len = config["model"]["max_context"]
+
+    pe = PositionalEncoding(d_model, max_len)
+    pe_output = pe.forward(torch.zeros(1, max_len, d_model))
+
+    plt.figure(figsize=(15, 5))
+    plt.pcolormesh(pe_output[0, :, :].detach().numpy())
+    plt.title("Positional Encoding")
+    plt.xlabel("Position")
+    plt.ylabel("Encoding Value")
+    plt.show()
 
 if __name__ == '__main__':
     cli(obj={})
