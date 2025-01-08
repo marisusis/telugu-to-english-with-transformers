@@ -1,4 +1,4 @@
-data_root="./.data_es2"
+data_root="./.data"
 
 [model]
 max_context=512
