@@ -354,8 +354,9 @@ def inference(ctx, model, input, max_tokens):
 @cli.command()
 @click.option("--model")
 @click.option("--count", default=10)
+@click.option("--data", default=None)
 @click.pass_context
-def score(ctx, model, count):
+def score(ctx, model, count, data):
     import nltk
 
     config = ctx.obj['config']
@@ -386,12 +387,16 @@ def score(ctx, model, count):
     
     translator = Translator(transformer, sp_source, sp_target, device)
 
-    print(f"Testing {count} random samples from the validation dataset...")
-    dataset = PairedTextDataset(f"{config['data_root']}/source_val.txt",
-                                f"{config['data_root']}/target_val.txt",
-                                sp_source,
-                                sp_target)
-    
+    if data is not None:
+        src, tgt = data.split(",")
+        dataset = PairedTextDataset(src, tgt, sp_source, sp_target)
+    else:
+        print(f"Testing {count} random samples from the validation dataset...")
+        dataset = PairedTextDataset(f"{config['data_root']}/source_val.txt",
+                                    f"{config['data_root']}/target_val.txt",
+                                    sp_source,
+                                    sp_target)
+
     df: pl.DataFrame = dataset.get_polars()
 
     sample = df.sample(count)
