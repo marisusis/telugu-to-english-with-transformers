@@ -36,7 +36,7 @@ class Translator():
     def inference(self, input, max_tokens=32):
 
         # Tokenize the input
-        input_ids = torch.tensor(self.source_tokenizer.encode(input)).unsqueeze(0).to(self.device)
+        input_ids = torch.tensor(self.source_tokenizer.encode(input, add_bos=True, add_eos=True)).unsqueeze(0).to(self.device)
 
         # Perform inference
         predicted_tokens = torch.LongTensor([self.target_tokenizer.bos_id()]).unsqueeze(0).to(self.device)
