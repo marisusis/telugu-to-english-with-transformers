@@ -139,7 +139,6 @@ def train(ctx, checkpoint):
         start_epoch = checkpoint["current_epoch"]
         if checkpoint.get("losses") is not None:
             losses = checkpoint["losses"]
-        # checkpoint["losses"]
 
     
 
@@ -192,16 +191,18 @@ def train(ctx, checkpoint):
                     state_dict = {
                         "model_state_dict": transformer.state_dict(),
                         "optimizer_state_dict": optimizer.state_dict(),
-                        "current_epoch": epoch
+                        "current_epoch": epoch,
+                        "losses": losses
                     }
                     torch.save(state_dict, f"{config['data_root']}/checkpoints/{epoch}_{count}_checkpoint.pth")
         
         state_dict = {
             "model_state_dict": transformer.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
-            "current_epoch": epoch + 1
+            "current_epoch": epoch + 1,
+            "losses": losses
         }
-        torch.save(state_dict, f"{config['data_root']}/checkpoints/{epoch}_checkpoint.pth")
+        torch.save(state_dict, f"{config['data_root']}/checkpoints/{epoch + 1}_checkpoint.pth")
                     
 
         with tqdm(val_dataset.batch(batch_size=config["training"]["batch_size"]),
