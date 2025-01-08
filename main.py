@@ -7,6 +7,7 @@ from plotting import *
 from dataset import *
 from tokenization import *
 from translation import *
+import get_datasets
 from colorama import Fore, Style
 
 import tomllib
@@ -17,7 +18,6 @@ import click
 
 import matplotlib.pyplot as plt
 
-from datasets import load_dataset
 
 from tqdm import tqdm
 
@@ -363,6 +363,11 @@ def score(ctx, model, count):
 
     print(f"{Style.DIM}Loading model...{Style.RESET_ALL}")
 
+    if model is None:
+        raise ValueError("Checkpoint path must be specified.")
+    
+    if not os.path.exists(model):
+        raise ValueError(f"Checkpoint file {model} does not exist.")
 
     sp_source = spm.SentencePieceProcessor(model_file=f"{config['data_root']}/tokenizers/source.model")
     sp_target = spm.SentencePieceProcessor(model_file=f"{config['data_root']}/tokenizers/target.model")
@@ -438,28 +443,53 @@ def tokenize(ctx, src_vocab_size=16000):
     )
 
 @cli.command()
+@click.argument("dataset")
 @click.pass_context
-def get_dataset(ctx):
+def get_dataset(ctx, dataset):
     config = ctx.obj['config']
 
-    # Load dataset
-    ds = load_dataset("ai4bharat/samanantar", "te")
-    ds = ds["train"]
-    ds = ds.rename_column("idx", "id")
-    ds = ds.rename_column("src", "en")
-    ds = ds.rename_column("tgt", "te")
+    datasets = {
+        "en_te_1": get_datasets.get_semanantar,
+        "en_te_2": get_datasets.get_en_te_pairs,
+        "en_es_1": get_datasets.get_en_es_1
+    }
+
+    if dataset is None:
+        print(f"{Fore.RED}No dataset specified.{Style.RESET_ALL}")
+        print("Available datasets:")
+        for key in datasets.keys():
+            print(key)
+        return
     
+    if dataset not in datasets: 
+        print(f"{Fore.RED}Unknown dataset \"{dataset}\".{Style.RESET_ALL}")
+        print("Available datasets:")
+        for key in datasets.keys():
+            print(key)
 
-    path = f"{config['data_root']}/source.txt"
-    print(f"Writing source dataset to {path}")
-    with open(path, "w", encoding="utf-8") as f:
-        for entry in tqdm(ds):
-            f.write(entry["te"] + "\n")
+    get_function = datasets[dataset]
+    get_function(config["data_root"])
 
-    print(f"Writing target dataset to {path}")
-    with open(path, "w", encoding="utf-8") as f:
-        for entry in tqdm(ds):
-            f.write(entry["en"] + "\n")
+    # check line count
+
+    source_lines = 0
+    with open(f"{config['data_root']}/source.txt", 'r', encoding='utf-8') as f:
+        for _ in tqdm(f, desc="Counting source lines"):
+            source_lines += 1
+
+    target_lines = 0
+    with open(f"{config['data_root']}/target.txt", 'r', encoding='utf-8') as f:
+        for _ in tqdm(f, desc="Counting target lines"):
+            target_lines += 1
+
+    if (target_lines != source_lines):
+        print(f"{Fore.RED}Source and target datasets have different lengths.{Style.RESET_ALL}")
+        print(f"Source lines: {source_lines}")
+        print(f"Target lines: {target_lines}")
+    else:
+        print(f"{Fore.GREEN}Source and target datasets have the same length.{Style.RESET_ALL}")
+
+
 
 @cli.command()
 @click.pass_context
