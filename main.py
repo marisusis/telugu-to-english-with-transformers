@@ -1,10 +1,12 @@
 import os
 
+import nltk.translate.bleu_score
 import sklearn.model_selection
 from model import *
 from plotting import *
 from dataset import *
 from tokenization import *
+from translation import *
 from colorama import Fore, Style
 
 import tomllib
@@ -41,14 +43,15 @@ def transformer_from_config(config):
 
 @click.group()
 @click.option('--debug/--no-debug', default=False)
+@click.option('--config', default="config.toml")
 @click.option('--device', default="cpu")
 @click.pass_context
-def cli(ctx, debug, device):
+def cli(ctx, config, debug, device):
     # ensure that ctx.obj exists and is a dict (in case `cli()` is called
     # by means other than the `if` block below)
     ctx.ensure_object(dict)
 
-    with open('config.toml', 'rb') as f:
+    with open(config, 'rb') as f:
         config = tomllib.load(f)
 
     print(f"{Style.DIM}Using config {config}.{Style.RESET_ALL}")
@@ -141,6 +144,15 @@ def train(ctx, checkpoint):
             losses = checkpoint["losses"]
 
     
+    def save_model(path):
+        state_dict = {
+            "model_state_dict": transformer.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "current_epoch": epoch,
+            "config": config,
+            "losses": losses
+        }
+        torch.save(state_dict, path)
 
     print(f"{Style.DIM}Saving model every {config['training']['save_every']} batches.{Style.RESET_ALL}")
     
@@ -188,13 +200,7 @@ def train(ctx, checkpoint):
 
                 count += 1
                 if count % config["training"]["save_every"] == 0:
-                    state_dict = {
-                        "model_state_dict": transformer.state_dict(),
-                        "optimizer_state_dict": optimizer.state_dict(),
-                        "current_epoch": epoch,
-                        "losses": losses
-                    }
-                    torch.save(state_dict, f"{config['data_root']}/checkpoints/{epoch}_{count}_checkpoint.pth")
+                    save_model(f"{config['data_root']}/checkpoints/{epoch}_{count}_checkpoint.pth")
         
         state_dict = {
             "model_state_dict": transformer.state_dict(),
@@ -318,17 +324,15 @@ def test_model(ctx):
 
 @cli.command()
 @click.argument("input")
-@click.option("--model", default=None)
+@click.option("--model")
+@click.option("--max_tokens", default=32)
 @click.pass_context
-def inference(ctx, model, input):
+def inference(ctx, model, input, max_tokens):
     config = ctx.obj['config']
     device = ctx.obj['device']
 
     sp_source = spm.SentencePieceProcessor(model_file=f"{config['data_root']}/tokenizers/source.model")
     sp_target = spm.SentencePieceProcessor(model_file=f"{config['data_root']}/tokenizers/target.model")
-
-    input_tokens = sp_source.encode(input, add_bos=True, add_eos=True)
-    print(f"Input tokens: {input_tokens}")
 
     transformer = Transformer(config["model"]["d_model"],
                                 config["model"]["d_ff"],
@@ -338,25 +342,63 @@ def inference(ctx, model, input):
                                 config["model"]["N"],
                                 config["model"]["max_context"])
     
-    transformer.eval()
+    checkpoint = torch.load(model, map_location=device, weights_only=True)
 
-    transformer.to(device)
+    transformer.load_state_dict(checkpoint["model_state_dict"])
     
-    if model is not None:
-        print(f"Loading model from {model}")
-        checkpoint = torch.load(model, weights_only=True, map_location=device)
-        transformer.load_state_dict(checkpoint["model_state_dict"])
-    
-    input_tokens = torch.LongTensor(sp_source.encode_as_ids(input, add_bos=True)).unsqueeze(0).to(device)
-    
-    predicted_tokens = torch.tensor([1]).to(device)
+    translator = Translator(transformer, sp_source, sp_target, device)
 
-    for i in tqdm(range(48)):
-        output = transformer.forward(predicted_tokens.unsqueeze(0), input_tokens)
-        output = torch.argmax(output, dim=-1)
-        predicted_tokens = torch.cat([predicted_tokens, output[0, -1].unsqueeze(0)])
+    output = translator.inference(input=input, max_tokens=max_tokens)
+    print(output)
 
-    print(sp_target.DecodeIds(predicted_tokens.tolist()))
+@cli.command()
+@click.option("--model")
+@click.option("--count", default=10)
+@click.pass_context
+def score(ctx, model, count):
+    import nltk
+
+    config = ctx.obj['config']
+    device = ctx.obj['device']
+
+    print(f"{Style.DIM}Loading model...{Style.RESET_ALL}")
+
+
+    sp_source = spm.SentencePieceProcessor(model_file=f"{config['data_root']}/tokenizers/source.model")
+    sp_target = spm.SentencePieceProcessor(model_file=f"{config['data_root']}/tokenizers/target.model")
+
+    transformer = Transformer(config["model"]["d_model"],
+                                config["model"]["d_ff"],
+                                config["model"]["h"],
+                                sp_source.GetPieceSize(),
+                                sp_target.GetPieceSize(),
+                                config["model"]["N"],
+                                config["model"]["max_context"])
+    
+    checkpoint = torch.load(model, map_location=device, weights_only=True)
+
+    transformer.load_state_dict(checkpoint["model_state_dict"])
+    
+    translator = Translator(transformer, sp_source, sp_target, device)
+
+    print(f"Testing {count} random samples from the validation dataset...")
+    dataset = PairedTextDataset(f"{config['data_root']}/source_val.txt",
+                                f"{config['data_root']}/target_val.txt",
+                                sp_source,
+                                sp_target)
+    
+    df: pl.DataFrame = dataset.get_polars()
+
+    sample = df.sample(count)
+    scores = []
+
+    for row in tqdm(sample.iter_rows(), total=count):
+        hypothesis = translator.inference(row[1])
+        reference = row[2]
+        bleu_score = nltk.translate.bleu_score.sentence_bleu([reference], hypothesis) * 100
+        scores.append(bleu_score)
+
+    print(f"{Fore.GREEN}Average BLEU score: {np.mean(scores):.2f}, median score: {np.median(scores):.2f}{Style.RESET_ALL}")
 
 
 @cli.command()
@@ -370,12 +412,6 @@ def tokenize(ctx, src_vocab_size=16000):
     if not os.path.exists(tokenizer_dir):
         os.makedirs(tokenizer_dir)
 
-    start_id = 1
-    end_id = 2
-    pad_id = 0
-    unk_id = 3
-
-
     spm.SentencePieceTrainer.train(
         input=os.path.join(config["data_root"], "source.txt"),
         model_prefix=os.path.join(config["data_root"], "tokenizers", "source"),
@@ -383,10 +419,10 @@ def tokenize(ctx, src_vocab_size=16000):
         input_sentence_size=config["tokenizer"]["input_sentence_size"],
         max_sentence_length=config["tokenizer"]["max_sentence_length"],
         character_coverage=1.0,
-        bos_id=start_id,
-        eos_id=end_id,
-        pad_id=pad_id,
-        unk_id=unk_id
+        bos_id=config["tokenizer"]["start_id"],
+        eos_id=config["tokenizer"]["end_id"],
+        pad_id=config["tokenizer"]["pad_id"],
+        unk_id=config["tokenizer"]["unk_id"]
     )
     spm.SentencePieceTrainer.train(
         input=os.path.join(config["data_root"], "target.txt"),
@@ -395,10 +431,10 @@ def tokenize(ctx, src_vocab_size=16000):
         input_sentence_size=config["tokenizer"]["input_sentence_size"],
         max_sentence_length=config["tokenizer"]["max_sentence_length"],
         character_coverage=1.0,
-        bos_id=start_id,
-        eos_id=end_id,
-        pad_id=pad_id,
-        unk_id=unk_id
+        bos_id=config["tokenizer"]["start_id"],
+        eos_id=config["tokenizer"]["end_id"],
+        pad_id=config["tokenizer"]["pad_id"],
+        unk_id=config["tokenizer"]["unk_id"]
     )
 
 @cli.command()

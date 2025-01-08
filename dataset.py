@@ -3,6 +3,7 @@ import torch
 import linecache
 import timeit
 import numpy as np
+import polars as pl
 import sentencepiece as spm
 from queue import Queue
 import threading
@@ -30,6 +31,25 @@ class PairedTextDataset():
         
         if self.source_lines != self.target_lines:
             raise ValueError("Source and target files must have the same number of lines")
+        
+    def get_polars(self):
+        source_ds = pl.read_csv(self.source_file,
+                            has_header=False, 
+                            separator="\n",
+                            schema_overrides={"source": pl.Utf8},
+                            quote_char=None)
+        
+        target_ds = pl.read_csv(self.target_file,
+                            has_header=False, 
+                            separator="\n",
+                            schema_overrides={"target": pl.Utf8},
+                            quote_char=None)
+        
+        source_ds = source_ds.with_row_index()
+        target_ds = target_ds.with_row_index()
+
+        return source_ds.join(target_ds, on="index")
+                    
 
     def batch_length(self, batch_size=32):
         return np.ceil(self.source_lines / batch_size)

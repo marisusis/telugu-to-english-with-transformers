@@ -38,6 +38,9 @@ class Decoder(nn.Module):
         return x
     
 class Transformer(nn.Module):
+    def from_dict(self, dict):
+        return Transformer(**dict)
+    
     def __init__(self, d_model, d_ff, h, in_vocab, out_vocab, N, max_context):
         super().__init__()
         self.encoder = Encoder(d_model, d_ff, h, in_vocab, N, 0.1, max_context)

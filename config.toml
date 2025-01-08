@@ -12,6 +12,10 @@ max_sentence_length=16384
 input_sentence_size=400000
 source_vocab_size=16384
 target_vocab_size=16384
+start_id = 1
+end_id = 2
+pad_id = 0
+unk_id = 3
 
 [training]
 save_every=100
