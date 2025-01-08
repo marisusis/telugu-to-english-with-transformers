@@ -413,7 +413,7 @@ def tokenize(ctx, src_vocab_size=16000):
     config = ctx.obj['config']
 
     """Tokenize the source and target dataset using sentencepiece."""
-    tokenizer_dir = os.path.join(os.path.dirname(__file__), '.data/tokenizers')
+    tokenizer_dir = os.path.join(os.path.dirname(__file__), f"{config['data_root']}/tokenizers")
     if not os.path.exists(tokenizer_dir):
         os.makedirs(tokenizer_dir)
 
@@ -465,7 +465,8 @@ def get_dataset(ctx, dataset):
         print(f"{Fore.RED}Unknown dataset \"{dataset}\".{Style.RESET_ALL}")
         print("Available datasets:")
         for key in datasets.keys():
-            print(key)
+            print("-", key)
+        return
 
     get_function = datasets[dataset]
     get_function(config["data_root"])
