@@ -100,7 +100,7 @@ class EncoderLayer(nn.Module):
         self.layer_norm2 = nn.LayerNorm(d_model)
         self.dropout2 = nn.Dropout(p_dropout)
 
-    def forward(self, x, mask):
+    def forward(self, x):
         x1 = self.attention_layer(x, x, x)
         x2 = self.layer_norm1(self.dropout1(x1) + x)
 

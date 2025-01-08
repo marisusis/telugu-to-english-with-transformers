@@ -165,7 +165,7 @@ def train(ctx, checkpoint):
 
                 try:
                     # TRAINING CODE GOES HERE
-                    output = transformer.forward(tgt_input, src, None, None)
+                    output = transformer.forward(tgt_input, src)
 
                     loss = critereon(output.view(-1, tgt_vocab_size), 
                                     tgt_output.view(-1))

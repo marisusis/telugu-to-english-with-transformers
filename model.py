@@ -10,11 +10,11 @@ class Encoder(nn.Module):
     def get_self_attention_weights(self):
         return [layer.get_last_attention_weights() for layer in self.encoder_layers]
 
-    def forward(self, x, mask):
+    def forward(self, x):
         x = self.embedding(x)
         x = self.positional_encoding(x)
         for layer in self.encoder_layers:
-            x = layer(x, mask)
+            x = layer(x)
         return x
     
 class Decoder(nn.Module):
@@ -50,9 +50,9 @@ class Transformer(nn.Module):
     def encoder_embedding(self):
         return self.encoder.embedding
 
-    def forward(self, target, source, target_mask, source_mask):
+    def forward(self, target, source):
         # print("x shape", x.shape, "y shape", y.shape)
-        context = self.encoder(source, source_mask)
+        context = self.encoder(source)
         # print("Context shape", context.shape)
         target = self.decoder(target, context)
         # print("Decoder shape", x.shape)
