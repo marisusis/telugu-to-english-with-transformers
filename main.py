@@ -27,6 +27,18 @@ import time
 import random
 
 
+def transformer_from_config(config):
+    sp_source = spm.SentencePieceProcessor(model_file=f"{config['data_root']}/tokenizers/source.model")
+    sp_target = spm.SentencePieceProcessor(model_file=f"{config['data_root']}/tokenizers/target.model")
+
+    return Transformer(config["model"]["d_model"], 
+                       config["model"]["d_ff"], 
+                       config["model"]["h"], 
+                        sp_source.GetPieceSize(),
+                        sp_target.GetPieceSize(),
+                       config["model"]["N"],
+                       config["model"]["max_context"])
+
 @click.group()
 @click.option('--debug/--no-debug', default=False)
 @click.option('--device', default="cpu")
@@ -69,8 +81,11 @@ def cli(ctx, debug, device):
 
 @cli.command()
 @click.pass_context
-def test_data(ctx): 
+def model_summary(ctx): 
     config = ctx.obj['config']
+    transformer = transformer_from_config(config)
+    from torchinfo import summary
+    print(summary(transformer))
 
 
 @cli.command()
@@ -109,17 +124,22 @@ def train(ctx, checkpoint):
     
     # criteron = nn.CrossEntropyLoss(ignore_index=0, reduction='mean')
     critereon = nn.NLLLoss(ignore_index=0, reduction='mean')
+    transformer.to(device)
     optimizer = torch.optim.Adam(transformer.parameters(), lr=config["training"]["lr"], betas=(0.9, 0.98), eps=1e-9)
     
+
+    losses = []
     start_epoch = 0
     if checkpoint is not None:
         checkpoint = torch.load(checkpoint, map_location=device)
         transformer.load_state_dict(checkpoint["model_state_dict"])
-        transformer.to(device)
         optimizer = torch.optim.Adam(transformer.parameters(), lr=config["training"]["lr"], betas=(0.9, 0.98), eps=1e-9)
 
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         start_epoch = checkpoint["current_epoch"]
+        if checkpoint.get("losses") is not None:
+            losses = checkpoint["losses"]
+        # checkpoint["losses"]
 
     
 
@@ -140,14 +160,16 @@ def train(ctx, checkpoint):
                 tgt_input = tgt_input.to(device)
                 tgt_output = tgt_output.to(device)
 
-                # break
+                tgt_mask = (tgt_input != 0).unsqueeze(-1)
+                src_mask = (src != 0).unsqueeze(-1)
 
                 try:
                     # TRAINING CODE GOES HERE
-                    output = transformer.forward(tgt_input, src)
+                    output = transformer.forward(tgt_input, src, None, None)
 
                     loss = critereon(output.view(-1, tgt_vocab_size), 
                                     tgt_output.view(-1))
+                    losses.append(loss.detach().item())
                     
                     optimizer.zero_grad()
                     loss.backward()
@@ -190,7 +212,7 @@ def train(ctx, checkpoint):
                 batch
 
         print(f"{Fore.GREEN}Finished epoch {epoch+1}{Style.RESET_ALL}")
-        
+
 
 @cli.command()
 @click.argument("model")
@@ -221,6 +243,7 @@ def validate(ctx, model):
                               config["model"]["N"],
                               config["model"]["max_context"])
     
+    transformer.to(device)
     critereon = nn.NLLLoss(ignore_index=0, reduction='mean')
 
     if model is not None:
@@ -228,12 +251,10 @@ def validate(ctx, model):
         transformer.load_state_dict(checkpoint["model_state_dict"])
         start_epoch = checkpoint["current_epoch"]
 
-    transformer = transformer.to(device)
-
     losses = []
 
-    with tqdm(val_dataset.batch(batch_size=1),
-            total=val_dataset.batch_length(batch_size=1)) as progress:
+    with tqdm(val_dataset.batch(batch_size=32),
+            total=val_dataset.batch_length(batch_size=32)) as progress:
         progress.colour = "blue"
         progress.set_description("Running validation")
         count = 0
@@ -247,12 +268,8 @@ def validate(ctx, model):
 
             loss = critereon(output.view(-1, tgt_vocab_size), 
                             tgt_output.view(-1))
-
+            
             losses.append(loss.detach().item())
-
-            count += 1
-            if count > 1000:
-                break
 
     losses = np.array(losses)
 
@@ -320,24 +337,25 @@ def inference(ctx, model, input):
                                 config["model"]["N"],
                                 config["model"]["max_context"])
     
-    if model is not None:
-        checkpoint = torch.load(model, weights_only=True, map_location=device)
-        transformer.load_state_dict(checkpoint["model_state_dict"])
+    transformer.eval()
 
     transformer.to(device)
-
-    output = transformer.forward(torch.tensor(sp_target.Encode(input, add_bos=True)).unsqueeze(0).to(device), 
-                                 torch.tensor(input_tokens).unsqueeze(0).to(device))
     
-    output = output.squeeze(0)
+    if model is not None:
+        print(f"Loading model from {model}")
+        checkpoint = torch.load(model, weights_only=True, map_location=device)
+        transformer.load_state_dict(checkpoint["model_state_dict"])
+    
+    input_tokens = torch.LongTensor(sp_source.encode_as_ids(input, add_bos=True)).unsqueeze(0).to(device)
+    
+    predicted_tokens = torch.tensor([1]).to(device)
 
-    # output = torch.multinomial(torch.softmax(output, dim=-1), num_samples=1).squeeze(-1)
+    for i in tqdm(range(48)):
+        output = transformer.forward(predicted_tokens.unsqueeze(0), input_tokens)
+        output = torch.argmax(output, dim=-1)
+        predicted_tokens = torch.cat([predicted_tokens, output[0, -1].unsqueeze(0)])
 
-    # perform greedy decoding
-    output = torch.argmax(output, dim=-1)
-
-    print(output)
-    print(sp_target.DecodeIds(output.tolist()))
+    print(sp_target.DecodeIds(predicted_tokens.tolist()))
 
 
 @cli.command()
