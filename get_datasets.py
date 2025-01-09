@@ -38,6 +38,33 @@ def get_en_te_pairs(dir):
         for entry in tqdm(ds):
             f.write(entry["Input"] + "\n")
 
+def get_en_te_kaggle(dir):
+    import mlcroissant as mlc
+    import pandas as pd
+
+    src_path = f"{dir}/source.txt"
+    tgt_path = f"{dir}/target.txt"
+    
+    # Fetch the Croissant JSON-LD
+    croissant_dataset = mlc.Dataset('http://www.kaggle.com/datasets/klu2000030172/english-telugu-translation-dataset/croissant/download')
+    
+    # Check what record sets are in the dataset
+    record_sets = croissant_dataset.metadata.record_sets
+    print(record_sets)
+    
+    # Fetch the records and put them in a DataFrame
+    df = pd.DataFrame(croissant_dataset.records(record_set=record_sets[0].uuid))
+    df = df.set_axis(["en","te"], axis=1)
+
+    src = open(src_path, "w", encoding="utf-8")
+    tgt = open(tgt_path, "w", encoding="utf-8")
+    for idx, series in df.iterrows():
+        src.write(series["te"].decode("utf-8") + "\n")
+        tgt.write(series["en"].decode("utf-8") + "\n")
+
+    src.close()
+    tgt.close()
+
 def get_en_es_1(dir):
     ds = load_dataset("okezieowen/english_to_spanish")
     ds = ds["train"]

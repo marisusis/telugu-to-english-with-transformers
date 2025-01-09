@@ -456,7 +456,8 @@ def get_dataset(ctx, dataset):
     datasets = {
         "en_te_1": get_datasets.get_semanantar,
         "en_te_2": get_datasets.get_en_te_pairs,
-        "en_es_1": get_datasets.get_en_es_1
+        "en_es_1": get_datasets.get_en_es_1,
+        "en_te_3": get_datasets.get_en_te_kaggle
     }
 
     if dataset is None:
