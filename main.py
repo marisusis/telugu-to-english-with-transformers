@@ -149,7 +149,6 @@ def train(ctx, checkpoint):
             "model_state_dict": transformer.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "current_epoch": epoch,
-            "config": config,
             "losses": losses
         }
         torch.save(state_dict, path)
@@ -341,6 +340,8 @@ def inference(ctx, model, input, max_tokens):
                                 sp_target.GetPieceSize(),
                                 config["model"]["N"],
                                 config["model"]["max_context"])
+
+    print(f"Loading model {model}...")
     
     checkpoint = torch.load(model, map_location=device, weights_only=True)
 
